@@ -1,0 +1,169 @@
+#!/usr/bin/expect
+#
+#
+#
+#
+# Define the hosts
+# Configuration part
+# Each time a new host is added don't forget to increment id field
+# Also take into consideration the prompt and if there are reqexes to be matched
+# Type is also important, as for now only srx and conectivitySwitch types are taken into account
+# The order of the properties should also be kept; do not change the layout
+#
+#             id hostname       value
+#
+dict set hosts 1 hostname       SRX1500-1
+dict set hosts 1 ip             10.0.70.75
+dict set hosts 1 type           srx
+dict set hosts 1 eqprompt       {genie@SRX1500-1>}
+dict set hosts 1 username       genie
+dict set hosts 1 password       password
+
+dict set hosts 2 hostname       Connectivity_Switch-1
+dict set hosts 2 ip             10.0.60.3
+dict set hosts 2 type           conectivitySwitch
+dict set hosts 2 eqprompt       {Connectivity_Switch-1}
+dict set hosts 2 username       genie
+dict set hosts 2 password       password
+
+dict set hosts 3 hostname       Connectivity_Switch-2
+dict set hosts 3 ip             10.0.60.4
+dict set hosts 3 type           conectivitySwitch
+dict set hosts 3 eqprompt       {Connectivity_Switch-2}
+dict set hosts 3 username       genie
+dict set hosts 3 password       password
+
+#disable output on terminal
+log_user 0
+
+#create timestamp to be added in log
+set timestamp [exec date]
+puts "$timestamp: Start expect script..."
+
+# Create the backup folder to put the backup files inside it
+set backup_folder_name network_device_backup_[clock format [clock seconds] -format {%Y%m%d}]
+set onsite_bkps_dir /home/edna_support/BACKUPS_NTWK/backups/
+set onsite_bkp_folder_path $onsite_bkps_dir$backup_folder_name
+set timestamp [exec date]
+puts "$timestamp: creating the directory $onsite_bkp_folder_path"
+exec mkdir $onsite_bkp_folder_path
+puts "$timestamp: the directory $onsite_bkp_folder_path was created successfully"
+
+#
+# Loop through the hosts
+#
+dict for {id info} $hosts {
+    dict with info {
+
+		#define logging
+		set hostname [string tolower $hostname]
+		set logfile $onsite_bkp_folder_path/$hostname-backup-[clock format [clock seconds] -format {%Y%m%d}]
+		
+		set timestamp [exec date]
+		puts "$timestamp: Getting configuration for: $hostname to: $logfile"
+
+        set fh [open $logfile w]
+
+		puts $fh "----------------------------------------------------------------------------------------------------------------------"
+		puts $fh "Equipment type: $type -> $hostname with IP: $ip"
+		puts $fh "----------------------------------------- BACKUP CONFIGURATION -------------------------------------------------------"
+		
+		#define the prompt
+		set prompt $eqprompt
+
+		#start spawning
+		spawn ssh $username@$ip	
+		set timeout 60
+		
+		#important as this is the max buffer in bytes that expect handles
+		#if configuration grows more and the output is more than 1000000 bytes (1000 Kb), then this parameter must be increased
+		#current configuration is at 395k so it will fit for a period of time.
+		#increasing this parameter too much could also crash the expext process so the value should be increased slowly
+		match_max 1000000
+
+		#check the type as commands are different
+		if {$type eq "srx"} {
+		
+				#send/expect part
+				expect {
+					#define the timeout
+					timeout {
+						puts $fh "Connection timed out"
+						exit 1
+					}
+
+					#send the password
+					"assword:" {
+						send -- "r0b0c0p\r"
+						exp_continue
+					}
+					
+					#send the commands
+					"$prompt" {
+						send "show config | display set | no-more\r"
+							expect {
+									"$prompt" {
+									send "exit\r"
+									}
+							}
+					}
+				}
+
+				
+		#for conectivity switch
+		} elseif {$type eq "conectivitySwitch"} {
+
+				#send/expect part
+				expect {
+					#define the timeout 
+					timeout {
+						puts $fh "Connection timed out. Cannot connect to node: $hostname!"
+						exit 1
+					}
+
+					#send the password
+					"assword:" {
+						send -- "$password\r"
+						exp_continue
+					}
+
+					#send the commands
+					-re "\.(\\d+) # " {
+						send "disable clipaging\r"
+						expect {
+								-re "\.(\\d+) # " {
+									send "show configuration\r"
+								}
+								#puts [open output_file.txt w] $expect_out(buffer);
+						}
+						
+						#get the configuration
+						expect {
+							-re "\.(\\d+) # " {
+								send "exit\r"
+							}
+						}
+					}
+				}
+
+		#for not supported equipment
+		} else {
+
+				puts $fh "Equipment not supported!"
+				exit 1
+
+		}
+		
+		puts $fh "$expect_out(buffer)"
+		unset expect_out(buffer)
+
+        #stop logging 
+        close $fh
+		
+		set timestamp [exec date]
+        puts "$timestamp: Finished."  
+    }
+}
+
+set timestamp [exec date]
+puts "$timestamp: End of expect script."
